@@ -1,5 +1,8 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import os from 'os'
 import config from '../config/config'
+import { parsePhoneNumber } from 'libphonenumber-js'
+import { getTimezonesForCountry } from 'countries-and-timezones'
 
 export default {
     getSystemHealth: () => {
@@ -18,5 +21,33 @@ export default {
                 heapUsed: `${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB`
             }
         }
+    },
+
+    parsePhoneNumber: (PhoneNumber: string) => {
+        try {
+            const parsedPhoneNumber = parsePhoneNumber(PhoneNumber)
+            if (parsedPhoneNumber) {
+                return {
+                    countryCode: parsedPhoneNumber.countryCallingCode,
+                    isoCode: parsedPhoneNumber.country || null,
+                    internationalNumber: parsedPhoneNumber.formatInternational()
+                }
+            }
+
+            return {
+                countryCode: null,
+                isoCode: null,
+                internationalNumber: null
+            }
+        } catch (error) {
+            return {
+                countryCode: null,
+                isoCode: null,
+                internationalNumber: null
+            }
+        }
+    },
+    countryTimeZone: (isoCode: string) => {
+        return getTimezonesForCountry(isoCode)
     }
 }
