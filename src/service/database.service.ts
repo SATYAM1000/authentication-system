@@ -20,6 +20,9 @@ export default {
             })
             .select(select)
     },
+    findUserById: (id: string) => {
+        return userModel.findById(id)
+    },
     registerUser: (payload: IUser) => {
         return userModel.create(payload)
     },
@@ -31,5 +34,11 @@ export default {
     },
     createRefreshToken: (token: IRefreshToken) => {
         return tokenModel.create(token)
+    },
+    deleteRefreshToken: (token: string) => {
+        return tokenModel.deleteOne({ token: token })
+    },
+    findRefreshToken: (token: string) => {
+        return tokenModel.findOne({ token: token })
     }
 }

@@ -13,6 +13,7 @@ import logger from '../util/logger'
 import utc from 'dayjs/plugin/utc'
 import dayjs from 'dayjs'
 import { EApplicationEnvironment } from '../constant/application'
+import { JwtPayload } from 'jsonwebtoken'
 
 dayjs.extend(utc)
 
@@ -31,6 +32,10 @@ interface IConfirmRequest extends Request {
 
 interface ILoginRequest extends Request {
     body: ILoginRequestBody
+}
+
+interface IDecryptedJwt extends JwtPayload {
+    userId: string
 }
 
 export default {
@@ -168,8 +173,6 @@ export default {
     },
     login: async (req: Request, res: Response, next: NextFunction) => {
         try {
-            //TODO:
-            // validate and parse the body
             const { body } = req as ILoginRequest
 
             const { error, value } = validateJoiSchema<ILoginRequestBody>(validateLoginBody, body)
@@ -203,26 +206,63 @@ export default {
             // update last login details
             user.lastLoginAt = dayjs().utc().toDate()
             await user.save()
-            const refreshTokenPayload:IRefreshToken={
+            const refreshTokenPayload: IRefreshToken = {
                 token: refreshToken
             }
             await databaseService.createRefreshToken(refreshTokenPayload)
             // cookie send
-            let DOMAIN = ''
-            try {
-                const url = new URL(config.SERVER_URL as string)
-                DOMAIN = url.hostname
-            } catch (error) {
-                throw error
-            }
+            const DOMAIN = quicker.getDomainFromUrl(config.SERVER_URL as string)
+
             res.cookie('accessToken', accessToken, {
+                httpOnly: true,
+                path: '/api/v1',
+                domain: DOMAIN,
+                sameSite: 'strict',
+                secure: !(config.ENV === EApplicationEnvironment.DEVELOPMENT),
+                maxAge: config.ACCESS_TOKEN.EXPIRY * 1000
+            }).cookie('refreshToken', refreshToken, {
+                httpOnly: true,
+                path: '/api/v1',
+                domain: DOMAIN,
+                sameSite: 'strict',
+                secure: !(config.ENV === EApplicationEnvironment.DEVELOPMENT),
+                maxAge: config.REFRESH_TOKEN.EXPIRY * 1000
+            })
+            httpResponse(req, res, 200, responseMessage.SUCCESS)
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    selfIdentification: (req: Request, res: Response, next: NextFunction) => {
+        try {
+            httpResponse(req, res, 200, responseMessage.SUCCESS)
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    logout: async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { cookies } = req
+            const { refreshToken } = cookies as {
+                refreshToken: string | undefined
+            }
+            if (refreshToken) {
+                await databaseService.deleteRefreshToken(refreshToken)
+            }
+
+            //clear cookies
+
+            const DOMAIN = quicker.getDomainFromUrl(config.SERVER_URL as string)
+            res.clearCookie('accessToken', {
                 httpOnly: true,
                 path: '/api/v1',
                 domain: DOMAIN,
                 sameSite: true,
                 secure: !(config.ENV === EApplicationEnvironment.DEVELOPMENT),
                 maxAge: config.ACCESS_TOKEN.EXPIRY * 1000
-            }).cookie('refreshToken', refreshToken, {
+            })
+
+            res.clearCookie('refreshToken', {
                 httpOnly: true,
                 path: '/api/v1',
                 domain: DOMAIN,
@@ -231,6 +271,48 @@ export default {
                 maxAge: config.REFRESH_TOKEN.EXPIRY * 1000
             })
             httpResponse(req, res, 200, responseMessage.SUCCESS)
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    refreshToken: async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { cookies } = req
+            const { refreshToken, accessToken } = cookies as {
+                refreshToken: string | undefined
+                accessToken: string | undefined
+            }
+            if (accessToken) {
+                return httpResponse(req, res, 200, responseMessage.SUCCESS, {
+                    accessToken
+                })
+            }
+            if (refreshToken) {
+                const rft = await databaseService.findRefreshToken(refreshToken)
+                if (rft) {
+                    const DOMAIN = quicker.getDomainFromUrl(config.SERVER_URL as string)
+                    const { userId } = quicker.verifyToken(refreshToken, config.REFRESH_TOKEN.REFRESH_TOKEN_SECRET as string) as IDecryptedJwt
+                    const accessToken = quicker.generateToken(
+                        { userId: userId },
+                        config.ACCESS_TOKEN.ACCESS_TOKEN_SECRET as string,
+                        config.ACCESS_TOKEN.EXPIRY
+                    )
+
+                    res.cookie('accessToken', accessToken, {
+                        httpOnly: true,
+                        path: '/api/v1',
+                        domain: DOMAIN,
+                        sameSite: 'strict',
+                        secure: !(config.ENV === EApplicationEnvironment.DEVELOPMENT),
+                        maxAge: config.ACCESS_TOKEN.EXPIRY * 1000
+                    })
+
+                    return httpResponse(req, res, 200, responseMessage.SUCCESS, {
+                        accessToken
+                    })
+                }
+            }
+            httpError(next, new Error(responseMessage.UNAUTHORIZED), req, 422)
         } catch (err) {
             httpError(next, err, req, 500)
         }
