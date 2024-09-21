@@ -8,5 +8,6 @@ export default {
         return `${entity} is already exists with ${identifier} `
     },
     INVALID_ACCOUNT_CONFIRMATION_TOKEN_OR_CODE: `Invalid account confirmation token or code`,
-    ALREADY_CONFIRMED: `Already confirmed`
+    ALREADY_CONFIRMED: `Already confirmed`,
+    INVALID_EMAIL_OR_PASSWORD: `Invalid email or password`
 }

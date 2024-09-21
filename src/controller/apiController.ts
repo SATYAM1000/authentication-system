@@ -3,8 +3,8 @@ import httpResponse from '../util/httpResponse'
 import responseMessage from '../constant/responseMessage'
 import httpError from '../util/httpError'
 import quicker from '../util/quicker'
-import { IRegisterRequestBody, IUser } from '../types/user.types'
-import { validateJoiSchema, validateRegisterBody } from '../validation/auth'
+import { ILoginRequestBody, IRefreshToken, IRegisterRequestBody, IUser } from '../types/user.types'
+import { validateJoiSchema, validateLoginBody, validateRegisterBody } from '../validation/auth'
 import databaseService from '../service/database.service'
 import { EUserRole } from '../constant/user.constant'
 import config from '../config/config'
@@ -12,6 +12,7 @@ import emailService from '../service/email.service'
 import logger from '../util/logger'
 import utc from 'dayjs/plugin/utc'
 import dayjs from 'dayjs'
+import { EApplicationEnvironment } from '../constant/application'
 
 dayjs.extend(utc)
 
@@ -26,6 +27,10 @@ interface IConfirmRequest extends Request {
     query: {
         code: string
     }
+}
+
+interface ILoginRequest extends Request {
+    body: ILoginRequestBody
 }
 
 export default {
@@ -157,6 +162,75 @@ export default {
                 token: params.token,
                 code: query.code
             })
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    login: async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            //TODO:
+            // validate and parse the body
+            const { body } = req as ILoginRequest
+
+            const { error, value } = validateJoiSchema<ILoginRequestBody>(validateLoginBody, body)
+            if (error) {
+                return httpError(next, error, req, 422)
+            }
+
+            const { emailAddress } = value
+            // find user
+            const user = await databaseService.findUserByEmailAddress(emailAddress, '+password')
+            if (!user) {
+                return httpError(next, new Error(responseMessage.NOT_FOUND('user')), req, 422)
+            }
+
+            // validate password
+            const isValidPassword = await quicker.comparePassword(value.password, user.password)
+            if (!isValidPassword) {
+                return httpError(next, new Error(responseMessage.INVALID_EMAIL_OR_PASSWORD), req, 400)
+            }
+            // access token and refresh token
+            const accessToken = quicker.generateToken(
+                { userId: user._id },
+                config.ACCESS_TOKEN.ACCESS_TOKEN_SECRET as string,
+                config.ACCESS_TOKEN.EXPIRY
+            )
+            const refreshToken = quicker.generateToken(
+                { userId: user._id },
+                config.REFRESH_TOKEN.REFRESH_TOKEN_SECRET as string,
+                config.REFRESH_TOKEN.EXPIRY
+            )
+            // update last login details
+            user.lastLoginAt = dayjs().utc().toDate()
+            await user.save()
+            const refreshTokenPayload:IRefreshToken={
+                token: refreshToken
+            }
+            await databaseService.createRefreshToken(refreshTokenPayload)
+            // cookie send
+            let DOMAIN = ''
+            try {
+                const url = new URL(config.SERVER_URL as string)
+                DOMAIN = url.hostname
+            } catch (error) {
+                throw error
+            }
+            res.cookie('accessToken', accessToken, {
+                httpOnly: true,
+                path: '/api/v1',
+                domain: DOMAIN,
+                sameSite: true,
+                secure: !(config.ENV === EApplicationEnvironment.DEVELOPMENT),
+                maxAge: config.ACCESS_TOKEN.EXPIRY * 1000
+            }).cookie('refreshToken', refreshToken, {
+                httpOnly: true,
+                path: '/api/v1',
+                domain: DOMAIN,
+                sameSite: true,
+                secure: !(config.ENV === EApplicationEnvironment.DEVELOPMENT),
+                maxAge: config.REFRESH_TOKEN.EXPIRY * 1000
+            })
+            httpResponse(req, res, 200, responseMessage.SUCCESS)
         } catch (err) {
             httpError(next, err, req, 500)
         }
