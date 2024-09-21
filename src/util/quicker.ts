@@ -3,6 +3,9 @@ import os from 'os'
 import config from '../config/config'
 import { parsePhoneNumber } from 'libphonenumber-js'
 import { getTimezonesForCountry } from 'countries-and-timezones'
+import bcrypt from 'bcrypt'
+import { v4 } from 'uuid'
+import { randomInt } from 'crypto'
 
 export default {
     getSystemHealth: () => {
@@ -49,5 +52,15 @@ export default {
     },
     countryTimeZone: (isoCode: string) => {
         return getTimezonesForCountry(isoCode)
+    },
+    hashPassword: (password: string) => {
+        return bcrypt.hash(password, 10)
+    },
+    generateRandomId: () => v4(),
+    generateOTP: (length: number) => {
+        const min = Math.pow(10, length - 1)
+        const max = Math.pow(10, length) - 1
+
+        return randomInt(min, max).toString()
     }
 }
