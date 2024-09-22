@@ -3,8 +3,24 @@ import httpResponse from '../util/httpResponse'
 import responseMessage from '../constant/responseMessage'
 import httpError from '../util/httpError'
 import quicker from '../util/quicker'
-import { ILoginRequestBody, IRefreshToken, IRegisterRequestBody, IUser } from '../types/user.types'
-import { validateJoiSchema, validateLoginBody, validateRegisterBody } from '../validation/auth'
+import {
+    IChangePasswordRequestBody,
+    IForgotRequestBody,
+    ILoginRequestBody,
+    IRefreshToken,
+    IRegisterRequestBody,
+    IResetPasswordRequestBody,
+    IUser,
+    IUserWithId
+} from '../types/user.types'
+import {
+    validateChangePasswordBody,
+    validateForgotPasswordBody,
+    validateJoiSchema,
+    validateLoginBody,
+    validateRegisterBody,
+    validateResetPasswordBody
+} from '../validation/auth'
 import databaseService from '../service/database.service'
 import { EUserRole } from '../constant/user.constant'
 import config from '../config/config'
@@ -36,6 +52,22 @@ interface ILoginRequest extends Request {
 
 interface IDecryptedJwt extends JwtPayload {
     userId: string
+}
+
+interface IForgotPasswordRequest extends Request {
+    body: IForgotRequestBody
+}
+
+interface IResetPasswordRequest extends Request {
+    params: {
+        token: string
+    }
+    body: IResetPasswordRequestBody
+}
+
+interface IChangePasswordRequest extends Request {
+    authenticatedUser: IUserWithId
+    body: IChangePasswordRequestBody
 }
 
 export default {
@@ -284,7 +316,7 @@ export default {
             }
             if (accessToken) {
                 return httpResponse(req, res, 200, responseMessage.SUCCESS, {
-                    accessToken
+                    accessToken: accessToken
                 })
             }
             if (refreshToken) {
@@ -313,6 +345,155 @@ export default {
                 }
             }
             httpError(next, new Error(responseMessage.UNAUTHORIZED), req, 422)
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    forgotPassword: async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            // 1. parsing body
+            const { body } = req as IForgotPasswordRequest
+
+            // 2. validate body
+            const { error, value } = validateJoiSchema<IForgotRequestBody>(validateForgotPasswordBody, body)
+
+            if (error) {
+                return httpError(next, error, req, 422)
+            }
+
+            // 3. get user
+            const user = await databaseService.findUserByEmailAddress(value.emailAddress)
+            // 4. check if user account is confirmed
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises
+            if (!user) {
+                return httpError(next, new Error(responseMessage.NOT_FOUND('user')), req, 404)
+            }
+
+            if (!user.accountConfirmation.status) {
+                return httpError(next, new Error(responseMessage.ACCOUNT_CONFIRMATION_REQUIRED), req, 422)
+            }
+            // 5. generate password reset token and expiry
+            const token = quicker.generateRandomId()
+            const expiry = quicker.generateResetPasswordExpiry(15)
+            // 6. update user
+            user.passwordReset.token = token
+            user.passwordReset.expiry = expiry
+
+            await user.save()
+
+            // 7. email address
+            const resetURL = `${config.FRONTEND_URL}/reset-password/${token}`
+            const to = [value.emailAddress]
+            const subject = 'Reset your account'
+            const text = `Hey ${user.name}!\n\nPlease click on the following link to reset your password: ${resetURL}`
+            await emailService.sendEmail(to, subject, text).catch((err) => {
+                logger.error(`EMAIL_ERROR`, {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                    meta: err
+                })
+            })
+            httpResponse(req, res, 200, responseMessage.SUCCESS)
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    resetPassword: async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            // body parsing and validation
+            const { body, params } = req as IResetPasswordRequest
+            const { token } = params
+            const { error, value } = validateJoiSchema<IResetPasswordRequestBody>(validateResetPasswordBody, body)
+
+            if (error) {
+                return httpError(next, error, req, 422)
+            }
+
+            // fetch user by token
+            const user = await databaseService.findUserByResetToken(token)
+            if (!user) {
+                return httpError(next, new Error(responseMessage.NOT_FOUND('user')), req, 404)
+            }
+
+            // check if user account is confirmed
+            if (!user.accountConfirmation.status) {
+                return httpError(next, new Error(responseMessage.ACCOUNT_CONFIRMATION_REQUIRED), req, 422)
+            }
+            // check url expiry
+            const expiry = user.passwordReset.expiry
+            if (!expiry) {
+                return httpError(next, new Error(responseMessage.INVALID_REQUEST), req, 422)
+            }
+            const currentTimeStamp = dayjs().valueOf()
+
+            if (currentTimeStamp > expiry) {
+                return httpError(next, new Error(responseMessage.EXPIRED_RESET_PASSWORD_TOKEN), req, 422)
+            }
+            // hash new password
+            const hashedPassword = await quicker.hashPassword(value.newPassword)
+
+            // update user
+            user.password = hashedPassword
+            user.passwordReset.token = null
+            user.passwordReset.expiry = null
+            user.passwordReset.lastResetAt = dayjs().utc().toDate()
+
+            await user.save()
+            // email send
+
+            const to = [user.emailAddress]
+            const subject = 'Password Reset Successful'
+            const text = `Hey ${user.name}!\n\nYour password has been reset successfully.`
+            await emailService.sendEmail(to, subject, text).catch((err) => {
+                logger.error(`EMAIL_ERROR`, {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                    meta: err
+                })
+            })
+            httpResponse(req, res, 200, responseMessage.SUCCESS)
+        } catch (err) {
+            httpError(next, err, req, 500)
+        }
+    },
+    changePassword: async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            //body parsing
+            const { body, authenticatedUser } = req as IChangePasswordRequest
+            const { error, value } = validateJoiSchema<IChangePasswordRequestBody>(validateChangePasswordBody, body)
+
+            if (error) {
+                return httpError(next, error, req, 422)
+            }
+
+            // finduser by id
+            const user = await databaseService.findUserById(authenticatedUser._id, '+password')
+            if (!user) {
+                return httpError(next, new Error(responseMessage.NOT_FOUND('user')), req, 404)
+            }
+            // compare password
+            const isValidPassword = await quicker.comparePassword(value.oldPassword, user.password)
+            if (!isValidPassword) {
+                return httpError(next, new Error(responseMessage.INVALID_PASSWORD), req, 422)
+            }
+            if (value.newPassword === value.oldPassword) {
+                return httpError(next, new Error(responseMessage.SAME_PASSWORD), req, 422)
+            }
+            // password hash
+            const hashedPassword = await quicker.hashPassword(value.newPassword)
+            // user update
+            user.password = hashedPassword
+            await user.save()
+
+            // email send
+            const to = [user.emailAddress]
+            const subject = 'Password Change Successful'
+            const text = `Hey ${user.name}!\n\nYour password has been changed successfully.`
+            await emailService.sendEmail(to, subject, text).catch((err) => {
+                logger.error(`EMAIL_ERROR`, {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+                    meta: err
+                })
+            })
+            httpResponse(req, res, 200, responseMessage.SUCCESS)
         } catch (err) {
             httpError(next, err, req, 500)
         }

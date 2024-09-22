@@ -20,8 +20,8 @@ export default {
             })
             .select(select)
     },
-    findUserById: (id: string) => {
-        return userModel.findById(id)
+    findUserById: (id: string, select: string = '') => {
+        return userModel.findById(id).select(select)
     },
     registerUser: (payload: IUser) => {
         return userModel.create(payload)
@@ -30,6 +30,11 @@ export default {
         return userModel.findOne({
             'accountConfirmation.token': token,
             'accountConfirmation.code': code
+        })
+    },
+    findUserByResetToken: (token: string) => {
+        return userModel.findOne({
+            'passwordReset.token': token
         })
     },
     createRefreshToken: (token: IRefreshToken) => {

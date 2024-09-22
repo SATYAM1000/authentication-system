@@ -39,6 +39,24 @@ export interface IUser {
     consent: boolean
 }
 
+export interface IUserWithId extends IUser {
+    _id: string
+}
+
 export interface IRefreshToken {
     token: string
+}
+
+export interface IForgotRequestBody {
+    emailAddress: string
+}
+
+export interface IResetPasswordRequestBody {
+    newPassword: string
+}
+
+export interface IChangePasswordRequestBody {
+    oldPassword: string
+    newPassword: string
+    confirmNewPassword: string
 }

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import { IRefreshToken } from '../types/user.types'
+import config from '../config/config'
 
 const tokenSchema = new mongoose.Schema<IRefreshToken>(
     {
@@ -10,6 +11,15 @@ const tokenSchema = new mongoose.Schema<IRefreshToken>(
     },
     {
         timestamps: true
+    }
+)
+
+tokenSchema.index(
+    {
+        createdAt: -1
+    },
+    {
+        expireAfterSeconds: config.REFRESH_TOKEN.EXPIRY
     }
 )
 
